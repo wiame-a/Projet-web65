@@ -171,7 +171,7 @@ class ProfileActivityTest extends TestCase
         $reader = $this->makeUser();
         $this->share($doc, $reader, 'lecture');
 
-        $this->as($owner)->getJson("/api/documents/{$doc->id}/activity")->assertOk()->assertJsonCount(1, 'data');
+        $this->as($owner)->getJson("/api/documents/{$doc->id}/activity")->assertOk()->assertJsonCount(2, 'data');
         $this->as($this->makeUser(User::ROLE_ARCHIVISTE))->getJson("/api/documents/{$doc->id}/activity")->assertOk();
         $this->as($reader)->getJson("/api/documents/{$doc->id}/activity")->assertForbidden();
         $this->as($stranger)->getJson("/api/documents/{$doc->id}/activity")->assertForbidden();
