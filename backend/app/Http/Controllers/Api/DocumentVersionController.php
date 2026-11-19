@@ -5,10 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreVersionRequest;
 use App\Http\Resources\VersionResource;
-use App\Models\ActivityLog;
 use App\Models\Document;
 use App\Models\DocumentVersion;
-use App\Services\ActivityLogger;
 use App\Services\DocumentVersionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -35,31 +33,9 @@ class DocumentVersionController extends Controller
     {
         Gate::authorize('addVersion', $document); // refuse : lecture seule, archivé, sans accès
 
-        $version = $this->service->addVersion($document, $request->user(), $request->file('fichier'));
+        $version = $this->service->addVersionToDocument($document, $request->user(), $request->file('fichier'));
 
-        // Le contenu change : une décision de validation / rejet ne vaut plus,
-        // le document repasse « en attente » pour être revalidé. (save() met aussi updated_at à jour.)
-        $wasDecided = $document->validation !== Document::VALIDATION_EN_ATTENTE;
-        if ($wasDecided) {
-            $document->forceFill([
-                'validation' => Document::VALIDATION_EN_ATTENTE,
-                'motif_rejet' => null,
-                'validated_by' => null,
-                'validated_at' => null,
-            ])->save();
-        } else {
-            $document->touch();
-        }
-
-        ActivityLogger::log(
-            $request->user(),
-            ActivityLog::VERSION_ADDED,
-            'a ajouté la version '.$version->numero_version.' au document '.ActivityLogger::label($document).'.'
-                .($wasDecided ? ' Le document repasse en attente de validation.' : ''),
-            $document
-        );
-
-        return (new VersionResource($version->load('author:id,name')))->response()->setStatusCode(201);
+        return (new VersionResource($version))->response()->setStatusCode(201);
     }
 
     /**
@@ -67,19 +43,13 @@ class DocumentVersionController extends Controller
      * n'est envoyé (en flux binaire) qu'après vérification du droit de lecture.
      * La route utilise scopeBindings : la version doit appartenir au document.
      */
-    public function download(Request $request, Document $document, DocumentVersion $version): StreamedResponse|JsonResponse
+    public function download(Request $request, Document $document, DocumentVersion $version): StreamedResponse
     {
         Gate::authorize('view', $document);
 
-        $disk = Storage::disk(DocumentVersionService::DISK);
+        $this->service->recordDownload($document, $version, $request->user());
 
-        if (! $disk->exists($version->chemin_fichier)) {
-            return response()->json(['message' => 'Fichier introuvable sur le serveur.'], 404);
-        }
-
-        ActivityLogger::log($request->user(), ActivityLog::VERSION_DOWNLOADED, 'a téléchargé la version '.$version->numero_version.' du document '.ActivityLogger::label($document).'.', $document);
-
-        return $disk->download($version->chemin_fichier, $version->nom_original, [
+        return Storage::disk(DocumentVersionService::DISK)->download($version->chemin_fichier, $version->nom_original, [
             'X-Content-Type-Options' => 'nosniff',
             'Cache-Control' => 'private, no-store',
         ]);

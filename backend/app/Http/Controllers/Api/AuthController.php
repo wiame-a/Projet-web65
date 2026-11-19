@@ -6,12 +6,11 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\LoginRequest;
 use App\Http\Requests\RegisterRequest;
 use App\Http\Resources\UserResource;
-use App\Models\User;
+use App\Services\AuthService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
-use Laravel\Sanctum\PersonalAccessToken;
 
+/** Contrôleur fin : il reçoit la requête, appelle AuthService et formate la réponse. */
 class AuthController extends Controller
 {
     /**
@@ -21,6 +20,10 @@ class AuthController extends Controller
      */
     private const JSON_OPTIONS = JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_UNICODE;
 
+    public function __construct(private readonly AuthService $auth)
+    {
+    }
+
     private function appName(): string
     {
         return mb_convert_encoding((string) config('app.name', 'Archivium'), 'UTF-8', 'UTF-8');
@@ -28,40 +31,34 @@ class AuthController extends Controller
 
     public function register(RegisterRequest $request): JsonResponse
     {
-        // Le rôle n'est pas mass-assignable : un nouveau compte est toujours "user".
-        $user = User::create($request->safe()->only(['name', 'email', 'password']));
+        $result = $this->auth->register($request->safe()->only(['name', 'email', 'password']));
 
         return response()->json([
-            'message' => 'Bienvenue sur '.$this->appName().', '.$user->name.' ! Votre compte a bien été créé.',
-            'user' => new UserResource($user->fresh()),
-            'token' => $user->createToken('spa')->plainTextToken,
+            'message' => 'Bienvenue sur '.$this->appName().', '.$result['user']->name.' ! Votre compte a bien été créé.',
+            'user' => new UserResource($result['user']),
+            'token' => $result['token'],
         ], 201, [], self::JSON_OPTIONS);
     }
 
     public function login(LoginRequest $request): JsonResponse
     {
-        $user = User::where('email', $request->validated('email'))->first();
+        $user = $this->auth->attempt($request->validated('email'), $request->validated('password'));
 
         // Même message que l'email existe ou non (pas d'énumération de comptes).
-        if (! $user || ! Hash::check($request->validated('password'), $user->password)) {
+        if (! $user) {
             return response()->json(['message' => 'Identifiants incorrects.'], 401);
         }
 
         return response()->json([
             'message' => 'Content de vous revoir sur '.$this->appName().', '.$user->name.'.',
             'user' => new UserResource($user),
-            'token' => $user->createToken('spa')->plainTextToken,
+            'token' => $this->auth->issueToken($user),
         ], 200, [], self::JSON_OPTIONS);
     }
 
     public function logout(Request $request): JsonResponse
     {
-        // Révoque uniquement le token utilisé pour cette requête.
-        $token = $request->user()->currentAccessToken();
-
-        if ($token instanceof PersonalAccessToken) {
-            $token->delete();
-        }
+        $this->auth->logout($request->user());
 
         return response()->json(['message' => 'Déconnexion réussie. À bientôt sur '.$this->appName().'.']);
     }

@@ -6,26 +6,29 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\CategoryRequest;
 use App\Http\Resources\CategoryResource;
 use App\Models\Category;
+use App\Services\CategoryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Gate;
 
 class CategoryController extends Controller
 {
+    public function __construct(private readonly CategoryService $categories)
+    {
+    }
+
     public function index()
     {
         Gate::authorize('viewAny', Category::class);
 
-        return CategoryResource::collection(
-            Category::withCount('documents')->orderBy('nom')->get()
-        );
+        return CategoryResource::collection($this->categories->all());
     }
 
     public function store(CategoryRequest $request): JsonResponse
     {
         Gate::authorize('create', Category::class);
 
-        $category = Category::create($request->validated());
+        $category = $this->categories->create($request->validated());
 
         return (new CategoryResource($category))->response()->setStatusCode(201);
     }
@@ -34,22 +37,14 @@ class CategoryController extends Controller
     {
         Gate::authorize('update', $category);
 
-        $category->update($request->validated());
-
-        return new CategoryResource($category->loadCount('documents'));
+        return new CategoryResource($this->categories->update($category, $request->validated()));
     }
 
-    public function destroy(Category $category): JsonResponse|Response
+    public function destroy(Category $category): Response
     {
         Gate::authorize('delete', $category);
 
-        if ($category->documents()->exists()) {
-            return response()->json([
-                'message' => 'Suppression impossible : cette catégorie contient encore des documents.',
-            ], 409);
-        }
-
-        $category->delete();
+        $this->categories->delete($category);
 
         return response()->noContent();
     }

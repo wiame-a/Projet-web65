@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Exceptions\BusinessRuleException;
+use App\Models\ActivityLog;
 use App\Models\Document;
 use App\Models\DocumentVersion;
 use App\Models\User;
@@ -13,6 +15,10 @@ use Throwable;
 
 class DocumentVersionService
 {
+    public function __construct(private readonly DocumentValidationService $validation)
+    {
+    }
+
     /** Disque privé (storage/app/private) : jamais accessible directement par URL. */
     public const DISK = 'local';
 
@@ -50,6 +56,47 @@ class DocumentVersionService
                 throw $e;
             }
         });
+    }
+
+    /**
+     * Dépose une nouvelle version et journalise l'action.
+     *
+     * Le contenu change : une décision de validation / rejet ne vaut plus, le document
+     * repasse « en attente » pour être revalidé. (save() met aussi updated_at à jour.)
+     */
+    public function addVersionToDocument(Document $document, User $author, UploadedFile $file): DocumentVersion
+    {
+        $version = $this->addVersion($document, $author, $file);
+
+        $wasDecided = $document->validation !== Document::VALIDATION_EN_ATTENTE;
+        if ($wasDecided) {
+            $this->validation->resetToPending($document);
+        } else {
+            $document->touch();
+        }
+
+        ActivityLogger::log(
+            $author,
+            ActivityLog::VERSION_ADDED,
+            'a ajouté la version '.$version->numero_version.' au document '.ActivityLogger::label($document).'.'
+                .($wasDecided ? ' Le document repasse en attente de validation.' : ''),
+            $document
+        );
+
+        return $version->load('author:id,name');
+    }
+
+    /**
+     * Vérifie que le fichier existe sur le disque privé et journalise le téléchargement.
+     * Le contrôleur envoie ensuite le flux binaire.
+     */
+    public function recordDownload(Document $document, DocumentVersion $version, User $user): void
+    {
+        if (! Storage::disk(self::DISK)->exists($version->chemin_fichier)) {
+            throw new BusinessRuleException('Fichier introuvable sur le serveur.', 404);
+        }
+
+        ActivityLogger::log($user, ActivityLog::VERSION_DOWNLOADED, 'a téléchargé la version '.$version->numero_version.' du document '.ActivityLogger::label($document).'.', $document);
     }
 
     /** Supprime tous les fichiers physiques d'un document. */
